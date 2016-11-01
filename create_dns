@@ -1,0 +1,206 @@
+#!/usr/bin/python
+
+###################################################
+####        COMO FUNCIONA O SISTEMA ?          ####
+###################################################
+'''
+
+
+Testa se IP tem o reverso configurado:
+
+Reverso configurado?
+	Sim: Testa se a OID do equipameto e a mesma do reverso:
+	OID e a mesma?
+		Sim: DNS CONFIGURADO CORRETAMENTE
+		Nao: Remove as entradas antigas do direto e reverso, e cadastra as novas.
+	Nao: Criar novas entradas de direto e reverso.
+
+#################################
+
+'''
+
+###################################################
+#### Configuracao no agente do zabbix abaixo. #####
+###################################################
+'''
+
+Server=Servidor do Zabbix.
+ServerActive=Servidor do Zabbix.
+Hostname={{NOME DO SERVIDOR}} - Deve ser igual ao host criado no zabbix.
+StartAgents=5
+DebugLevel=3
+LogFile=C:\Zabbix\zabbix_agentd.log
+Timeout=30
+
+###Configuracao para Windows 2012
+UserParameter=cria-dns[*],powershell Add-DnsServerResourceRecord -A -IPv4Address $1 -Name $2 -ZoneName $3 -AgeRecord -CreatePtr
+UserParameter=remove_direto-dns[*],powershell Remove-DnsServerResourceRecord -Name $1 -RRType A -ZoneName $2 -Force
+UserParameter=remove_reverso-dns[*],powershell Remove-DnsServerResourceRecord -Name $1 -RRType Ptr -ZoneName $2 -Force
+UserParameter=zone-dns[*],powershell Get-DnsServerZone
+
+###Configuracao para Windows 2008
+UserParameter=cria-dns[*],dnscmd.exe /RecordAdd $3 $2 /CreatePTR A $1 
+UserParameter=remove_direto-dns[*],dnscmd.exe /RecordDelete $2 $1 A /f
+UserParameter=remove_reverso-dns[*],dnscmd.exe /RecordDelete $2 $1 PTR /f
+UserParameter=zone-dns[*],dnscmd.exe /enumzones
+
+'''
+
+
+#########################################################
+#### Os retornos terao Mapeamento de Valor do zabbix ####
+#########################################################
+
+
+#########################################################
+####              INICIO DO SISTEMA                  ####
+#########################################################
+
+import sys
+import commands
+
+
+#########################################################
+####                 CONFIGURACOES                   ####
+#########################################################
+
+#Chamadas do argumento IP e community.
+ip = sys.argv[1]
+communit = sys.argv[2]
+debug = int(sys.argv[3])
+
+###Configuracao do servidor de DNS
+servidor_dns = "10.222.144.27"
+zonename = "cetad.corp.caixa.gov.br"
+oid = "sysName.0" #OID pode ser variavel, caso queira usar a mesma solucao em ativos de rede com MIBs diferentes.
+#########################################################
+####                 FINAL CONFIGURACOES             ####
+#########################################################
+
+
+status, output_host = commands.getstatusoutput('host %s %s' % (ip,servidor_dns))
+
+if status != 0:
+	#Testa coleta do SNMP
+        status, output_snmp = commands.getstatusoutput('snmpget -v2c -c %s %s %s' % (communit, ip, oid))
+        if status != 0:
+		### "Erro na consulta de SNMP"
+		print 8
+		if debug == 1:
+			print status, output_snmp
+        else:
+                status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k cria-dns[%s,%s,%s]" % (servidor_dns, ip , str(output_snmp.split()[-1]).upper(), zonename))
+                if status != 0:
+                        ### "Erro na execucao do comando no servidor windows"
+			print 9
+			if debug == 1:
+				print status, output
+				print "/usr/local/bin/zabbix_get -s %s -k cria-dns[%s,%s,%s]" % (servidor_dns, ip , str(output_snmp.split()[-1]).upper(), zonename)
+			sys.exit(1)
+
+                if 'failed' in output:
+                        ### "Erro na criacao do registro de dns"
+			print 2
+			if debug == 1:
+				print status, output
+			sys.exit(1)
+		else:
+			### "Registro de dns criado com sucesso"
+                        print 1
+		if debug == 1:
+			print status, output
+
+else:
+
+        status, output_snmp = commands.getstatusoutput('snmpget -v2c -c %s %s %s' % (communit, ip, oid))
+	if status == 0:
+		if str(output_snmp.split()[-1]).lower() == output_host.split()[-1].split('.')[0]:
+	        	### "DNS ja cadastrado"
+			print 3
+			if debug == 1:
+				print str(output_snmp.split()[-1]).lower(), output_host.split()[-1].split('.')[0]
+		else:
+			####Removendo a entrada do direto:
+			status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k remove_direto-dns[%s,%s]" % (servidor_dns, output_host.split()[-1], zonename))
+			if status != 0:
+				### "Erro na execucao do comando no servidor windows"
+				print 9
+				if debug == 1:
+					print status, output
+				sys.exit(1)
+
+			if 'failed' in output:
+        	              	### "Erro remocao do apontamento direto"
+		                print 4
+				if debug == 1:
+					print status, output
+        	        	sys.exit(1)
+			
+			####Removeondo a entrada do reverso
+			####Converter IP em reverso:
+			ipr = str(ip).split('.')			
+
+			####Buscando a zona de reverso no servidor dns windows:
+			status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k zone-dns" % servidor_dns)
+			
+			####Teste busca zona 1:
+			reverso = ipr[2]+'.'+ipr[1]+'.'+ipr[0]+'.in-addr.arpa'			
+
+			if reverso in output:
+				###Executa comando de remocao de reverso:
+	 			status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k remove_reverso-dns[%s,%s]" % (servidor_dns, ipr[3],reverso))	
+
+				if status != 0:
+					### "Erro na execucao do comando no servidor windows"
+					print 9
+					if debug == 1:
+						print status, output
+					sys.exit(1)
+
+				if 'failed' in output:
+					### "Erro na remocao do reverso"
+					print 5 
+					if debug == 1:
+						print status, output
+					sys.exit(1)
+
+			else:
+				reverso = ipr[1]+'.'+ipr[0]+'.in-addr.arpa'
+				if reverso in output:
+					direto_r = ipr[3]+'.'+ipr[2]
+	 				status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k remove_reverso-dns[%s,%s]" % (servidor_dns,direto_r,reverso))	
+					if status != 0:
+						### "Erro na execucao do comando no servidor windows"
+	                                        print 9
+						if debug == 1:
+							print status, output
+        	                                sys.exit(1)
+					if 'failed' in output:		
+	                                        ### "Erro na remocao do reverso"
+						print 5 
+						if debug == 1:
+							print status, output
+						sys.exit(1)
+				
+				else:
+					### 'Nao foi possivel encontrar zona reversa'
+					print 6 
+					if debug == 1:
+						print status, output
+
+			##Cria entrada de DNS caso de erro acima o sistema nao ira proceder:
+	               	status, output = commands.getstatusoutput("/usr/local/bin/zabbix_get -s %s -k cria-dns[%s,%s,%s]" % (servidor_dns, ip , output_snmp.split()[-1].upper(), zonename))
+			### "DNS Atualizado com sucesso %s" % output_snmp.split()[-1]+'.'+zonename
+			print 7 
+			if debug == 1:
+				print  "DNS Atualizado com sucesso %s" % output_snmp.split()[-1]+'.'+zonename
+
+
+	else:
+		### "Erro na coleta no SNMP"		
+		print 8
+		if debug == 1:
+			print status, output_snmp
+
+
+

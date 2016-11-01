@@ -70,8 +70,8 @@ communit = sys.argv[2]
 debug = int(sys.argv[3])
 
 ###Configuracao do servidor de DNS
-servidor_dns = "10.222.144.27"
-zonename = "cetad.corp.caixa.gov.br"
+servidor_dns = "10.0.0.1"
+zonename = "fbenatti.com"
 oid = "sysName.0" #OID pode ser variavel, caso queira usar a mesma solucao em ativos de rede com MIBs diferentes.
 #########################################################
 ####                 FINAL CONFIGURACOES             ####
